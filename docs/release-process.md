@@ -2,7 +2,7 @@
 
 Releases are published to [GitHub Releases](https://github.com/oleggohman/Spacer/releases). Each release carries:
 
-- `Spacer-X.Y.Z.dmg` and its `.sha256`: the signed, notarized app
+- `Spacer-X.Y.Z-notarized.dmg` and its `.sha256`: the signed, notarized app (a DMG made without `NOTARIZE=1` is `Spacer-X.Y.Z.dmg`)
 - `appcast.xml`: the Sparkle update feed
 - `Spacer-PPPC.mobileconfig`: the profile for managed Macs ([managed-macs.md](managed-macs.md))
 

@@ -18,6 +18,12 @@ notarize_requested() {
   [[ "${NOTARIZE:-}" == 1 ]]
 }
 
+# dmg_name VERSION: the release DMG's file name. A notarized DMG says so in its name
+# (Spacer-X.Y.Z-notarized.dmg), so it can't be mistaken for one that Gatekeeper blocks.
+dmg_name() {
+  if notarize_requested; then echo "Spacer-$1-notarized.dmg"; else echo "Spacer-$1.dmg"; fi
+}
+
 # designated_requirement: reads `codesign -dr -` output on stdin and prints the designated
 # requirement (nothing when there is none).
 designated_requirement() {

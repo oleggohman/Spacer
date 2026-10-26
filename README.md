@@ -10,7 +10,7 @@ A native macOS app that shows disk usage as a treemap. Scan a disk or folder, se
 
 ## Install
 
-Download the latest `Spacer-X.Y.Z.dmg` from [Releases](https://github.com/oleggohman/Spacer/releases/latest) and drag Spacer to Applications. Releases are signed and notarized. Spacer checks for updates daily (Spacer → Check for Updates… checks now).
+Download the latest `Spacer-X.Y.Z-notarized.dmg` from [Releases](https://github.com/oleggohman/Spacer/releases/latest) and drag Spacer to Applications. Releases are signed and notarized. Spacer checks for updates daily (Spacer → Check for Updates… checks now).
 
 Requires macOS 15 or later.
 

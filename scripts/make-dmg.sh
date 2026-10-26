@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Packages build/Spacer.app into build/Spacer-<version>.dmg, with an Applications shortcut,
+# Packages build/Spacer.app into build/Spacer-<version>.dmg (Spacer-<version>-notarized.dmg with
+# NOTARIZE=1, see dmg_name in scripts/lib/signing.sh), with an Applications shortcut,
 # and writes its SHA-256 next to it.
 #
 #   scripts/make-dmg.sh               build the app first (scripts/bundle.sh)
@@ -55,7 +56,7 @@ trap 'rm -rf "$STAGE"' EXIT
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 
-DMG="$ROOT/build/Spacer-$VERSION.dmg"
+DMG="$ROOT/build/$(dmg_name "$VERSION")"
 rm -f "$DMG" "$DMG.sha256"
 hdiutil create -quiet -volname "Spacer $VERSION" -srcfolder "$STAGE" -format UDZO -ov "$DMG"
 hdiutil verify -quiet "$DMG"

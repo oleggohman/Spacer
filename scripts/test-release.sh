@@ -118,8 +118,9 @@ if [[ "${STUB_DMG_COMMIT:-}" == 1 ]]; then
   git -c user.name=t -c user.email=t@t commit -q -m stray
 fi
 v="$(scripts/version.sh --short)"
-echo dmg >"build/Spacer-$v.dmg"
-echo sha >"build/Spacer-$v.dmg.sha256"
+source scripts/lib/signing.sh
+echo dmg >"build/$(dmg_name "$v")"
+echo sha >"build/$(dmg_name "$v").sha256"
 EOF
   fi
   chmod +x "$dir/repo/scripts/make-dmg.sh"
@@ -164,7 +165,7 @@ has_tag() { git -C "$1/repo" rev-parse -q --verify "refs/tags/v$(version_of "$1"
 no_tag() { ! has_tag "$1"; }
 head_is_init() { [[ "$(git -C "$1/repo" log -1 --pretty=%s)" == init ]]; }
 head_is_release() { [[ "$(git -C "$1/repo" log -1 --pretty=%s)" == "chore: release v$(version_of "$1")" ]]; }
-no_dmg() { [[ ! -e "$1/repo/build/Spacer-$(version_of "$1").dmg" ]]; }
+no_dmg() { ! compgen -G "$1/repo/build/Spacer-$(version_of "$1")*.dmg" >/dev/null; }
 state_kept() { [[ -f "$1/repo/build/release-state" ]]; }
 state_gone() { [[ ! -f "$1/repo/build/release-state" ]]; }
 gh_has() { grep -qF -- "$2" "$1/gh-args" 2>/dev/null; }
@@ -336,6 +337,7 @@ check "default: release commit" head_is_release "$d"
 check "default: tag" has_tag "$d"
 check "default: no notarytool or stapler call" notary_not_called "$d"
 check "default: gh gets the DMG" gh_has "$d" "build/Spacer-$(version_of "$d").dmg "
+check "default: the DMG name does not say notarized" test ! -e "$d/repo/build/Spacer-$(version_of "$d")-notarized.dmg"
 check "default: says the DMG is not notarized" grep -qF "is not notarized" "$d/log"
 
 d="$WORK/profile-only"
@@ -353,7 +355,8 @@ check "NOTARIZE=1: notarytool submit with the profile" xcrun_called "$d" "notary
 check "NOTARIZE=1: stapler staple" xcrun_called "$d" "stapler staple"
 check "NOTARIZE=1: stapler validate" xcrun_called "$d" "stapler validate"
 check "NOTARIZE=1: no not-notarized note" test "$(grep -c 'is not notarized' "$d/log")" -eq 0
-check "NOTARIZE=1: gh gets the DMG" gh_has "$d" "build/Spacer-$(version_of "$d").dmg "
+check "NOTARIZE=1: gh gets the notarized DMG" gh_has "$d" "build/Spacer-$(version_of "$d")-notarized.dmg "
+check "NOTARIZE=1: the DMG name says notarized" test -f "$d/repo/build/Spacer-$(version_of "$d")-notarized.dmg"
 
 d="$WORK/notarize-no-profile"
 STATE_NOTARIZATION=notarized REAL_DMG=1 new_repo "$d"

@@ -225,7 +225,9 @@ publish() {
   # no release commit or tag and publish can run again. An ad-hoc app has no stable code
   # requirement, so ad-hoc releases ship without the profile.
   local profile="build/Spacer-PPPC.mobileconfig"
-  local assets=("build/Spacer-$VERSION.dmg" "build/Spacer-$VERSION.dmg.sha256")
+  local dmg
+  dmg="build/$(dmg_name "$VERSION")"
+  local assets=("$dmg" "$dmg.sha256")
   # Remove a profile from an earlier run, so an ad-hoc release cannot ship a stale one.
   rm -f "$profile"
   if is_adhoc; then
@@ -261,7 +263,7 @@ publish() {
   if is_adhoc; then
     echo "ALLOW_ADHOC=1: skipping the Sparkle appcast (updates need a Developer ID signed app)"
   else
-    scripts/make-appcast.sh "build/Spacer-$VERSION.dmg" "$notes" "$appcast" build/Spacer.app
+    scripts/make-appcast.sh "$dmg" "$notes" "$appcast" build/Spacer.app
     assets+=("$appcast")
   fi
 
