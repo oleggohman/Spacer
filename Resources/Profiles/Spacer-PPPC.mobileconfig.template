@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for the Spacer PPPC (Privacy Preferences Policy Control) profile.
+  Do not upload this file. scripts/make-pppc-profile.sh replaces __CODE_REQUIREMENT__
+  with the designated requirement of the Developer ID signed app and writes
+  build/Spacer-PPPC.mobileconfig.
+  Keep the top-level PayloadIdentifier (com.oleggohman.spacer.pppc) fixed: macOS replaces
+  an installed profile that has the same PayloadIdentifier instead of adding a second one.
+  Both PayloadUUID values are fixed too, so profiles made from the same signed app are
+  identical files (the MDM may still assign its own UUID on upload).
+  Every service entry must have Identifier = the app's CFBundleIdentifier and
+  CodeRequirement = __CODE_REQUIREMENT__; Tests/SpacerCoreTests/PPPCProfileTemplateTests.swift
+  checks this.
+-->
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadDescription</key>
+			<string>Allows Spacer to read file sizes on the whole disk and on external and network volumes.</string>
+			<key>PayloadDisplayName</key>
+			<string>Spacer Privacy Preferences</string>
+			<key>PayloadIdentifier</key>
+			<string>com.oleggohman.spacer.pppc.tcc</string>
+			<key>PayloadType</key>
+			<string>com.apple.TCC.configuration-profile-policy</string>
+			<key>PayloadUUID</key>
+			<string>023607AD-1F7F-4C04-AB20-91C04DD38F30</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>Services</key>
+			<dict>
+				<key>SystemPolicyAllFiles</key>
+				<array>
+					<dict>
+						<key>Allowed</key>
+						<true/>
+						<key>CodeRequirement</key>
+						<string>__CODE_REQUIREMENT__</string>
+						<key>Comment</key>
+						<string>Full Disk Access: size protected folders such as Mail, Messages and other apps' containers.</string>
+						<key>Identifier</key>
+						<string>com.oleggohman.spacer</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>StaticCode</key>
+						<false/>
+					</dict>
+				</array>
+				<key>SystemPolicyRemovableVolumes</key>
+				<array>
+					<dict>
+						<key>Allowed</key>
+						<true/>
+						<key>CodeRequirement</key>
+						<string>__CODE_REQUIREMENT__</string>
+						<key>Comment</key>
+						<string>Scan external drives without a prompt.</string>
+						<key>Identifier</key>
+						<string>com.oleggohman.spacer</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>StaticCode</key>
+						<false/>
+					</dict>
+				</array>
+				<key>SystemPolicyNetworkVolumes</key>
+				<array>
+					<dict>
+						<key>Allowed</key>
+						<true/>
+						<key>CodeRequirement</key>
+						<string>__CODE_REQUIREMENT__</string>
+						<key>Comment</key>
+						<string>Scan network volumes without a prompt.</string>
+						<key>Identifier</key>
+						<string>com.oleggohman.spacer</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>StaticCode</key>
+						<false/>
+					</dict>
+				</array>
+				<key>SystemPolicyDesktopFolder</key>
+				<array>
+					<dict>
+						<key>Allowed</key>
+						<true/>
+						<key>CodeRequirement</key>
+						<string>__CODE_REQUIREMENT__</string>
+						<key>Comment</key>
+						<string>Desktop folder, so there is no prompt if Full Disk Access is removed.</string>
+						<key>Identifier</key>
+						<string>com.oleggohman.spacer</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>StaticCode</key>
+						<false/>
+					</dict>
+				</array>
+				<key>SystemPolicyDocumentsFolder</key>
+				<array>
+					<dict>
+						<key>Allowed</key>
+						<true/>
+						<key>CodeRequirement</key>
+						<string>__CODE_REQUIREMENT__</string>
+						<key>Comment</key>
+						<string>Documents folder, so there is no prompt if Full Disk Access is removed.</string>
+						<key>Identifier</key>
+						<string>com.oleggohman.spacer</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>StaticCode</key>
+						<false/>
+					</dict>
+				</array>
+				<key>SystemPolicyDownloadsFolder</key>
+				<array>
+					<dict>
+						<key>Allowed</key>
+						<true/>
+						<key>CodeRequirement</key>
+						<string>__CODE_REQUIREMENT__</string>
+						<key>Comment</key>
+						<string>Downloads folder, so there is no prompt if Full Disk Access is removed.</string>
+						<key>Identifier</key>
+						<string>com.oleggohman.spacer</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>StaticCode</key>
+						<false/>
+					</dict>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Grants Spacer Full Disk Access and access to removable and network volumes, so it can size every folder without a prompt.</string>
+	<key>PayloadDisplayName</key>
+	<string>Spacer – Privacy Access</string>
+	<key>PayloadIdentifier</key>
+	<string>com.oleggohman.spacer.pppc</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>EDEBDDA3-137D-4EA3-8D90-F702820611D3</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

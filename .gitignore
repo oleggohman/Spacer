@@ -1,0 +1,37 @@
+.boost/
+# macOS Finder metadata
+.DS_Store
+
+# Temporary Boost hook metadata
+.boost/
+
+# Local memory notes
+MEMORY.md
+PLAN.md
+# Release artifacts, wherever they end up
+*.dmg
+*.ipa
+*.pkg
+
+
+# Agent-assistant config, not part of the app
+.agents/
+.claude/
+.codebuddy/
+.codegraph/
+
+# Local agent instructions, not part of the app
+AGENTS.md
+
+# Internal release workflow notes, not part of the app
+RELEASING.md
+
+
+
+
+# Swift build output and app bundle
+.build/
+build/
+
+# Ralphex run state
+.ralphex/
