@@ -10,9 +10,14 @@
 #       from it (scripts/make-pppc-profile.sh; skipped with ALLOW_ADHOC=1), packages it into a
 #       DMG (no rebuild; signed, and notarized and stapled with NOTARIZE=1), writes the Sparkle
 #       appcast build/appcast.xml for it (scripts/make-appcast.sh), then commits the
-#       version, tags vX.Y.Z and, when an "origin" remote exists, pushes and publishes a GitHub
-#       release with the DMG, the profile and the appcast attached. All three are made before
-#       the commit and tag.
+#       version, tags vX.Y.Z, pushes both to origin and publishes a GitHub release with the DMG,
+#       the profile and the appcast attached. All three are made before the commit and tag.
+#       Last, it checks that the update feed installed copies read now serves the new build.
+#
+# Releases go to GitHub Releases. The repo is the one SUFeedURL in Resources/Info.plist names
+# (https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml): origin must point
+# at it and `gh` must be logged in, which both phases check before the slow steps. An ad-hoc
+# release (ALLOW_ADHOC=1) may stay local when there is no origin, and is never marked latest.
 #
 # RELEASE_BRANCH (default: main) is the branch releases are cut from.
 #
@@ -32,6 +37,9 @@ STATE="$ROOT/build/release-state"
 BRANCH="${RELEASE_BRANCH:-main}"
 # shellcheck source=scripts/lib/signing.sh
 source "$ROOT/scripts/lib/signing.sh"
+# shellcheck source=scripts/lib/github.sh
+source "$ROOT/scripts/lib/github.sh"
+FEED_URL="$(plutil -extract SUFeedURL raw Resources/Info.plist 2>/dev/null || true)"
 
 fail() {
   echo "error: $*" >&2
@@ -102,9 +110,57 @@ require_sparkle_key() {
     fail "no Sparkle EdDSA key for account $account in the keychain (or access was denied); see generate_keys"
 }
 
+# The repo releases are published to (owner/repo, from SUFeedURL). Developer ID releases need
+# origin to be that repo on github.com and gh to be logged in; checked before the slow steps.
+# Ad-hoc releases skip the check and use origin as it is, if there is one.
+REPO=""
+require_github() {
+  is_adhoc && return
+  REPO="$(feed_repo Resources/Info.plist)" ||
+    fail "SUFeedURL in Resources/Info.plist is not https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml"
+  local origin origin_repo
+  origin="$(git config --get remote.origin.url || true)"
+  [[ -n "$origin" ]] || fail "no origin remote; add it: git remote add origin https://github.com/$REPO.git"
+  if ! origin_repo="$(remote_repo "$origin")" || ! same_repo "$origin_repo" "$REPO"; then
+    fail "origin is $origin, but the app's update feed is on github.com/$REPO; they must match"
+  fi
+  gh auth status >/dev/null 2>&1 || fail "gh is not logged in to GitHub; run: gh auth login"
+}
+
+# publish_release VERSION ASSETS...: creates the GitHub release for the pushed tag. When gh
+# fails after the push, the commit and tag are already public, so print the command that
+# finishes the release instead of leaving it half done without a word.
+publish_release() {
+  local version="$1"
+  shift
+  local args=("v$version" "$@" --title "Spacer $version" --notes-file "$ROOT/build/release-notes-v$version.md" --verify-tag)
+  [[ -n "$REPO" ]] && args+=(--repo "$REPO")
+  # An ad-hoc release has no appcast, so it must not become "latest": installed copies fetch
+  # releases/latest/download/appcast.xml.
+  is_adhoc && args+=(--latest=false)
+  gh release create "${args[@]}" ||
+    fail "the tag v$version is pushed but the GitHub release was not created; finish it with:
+  gh release create $(printf '%q ' "${args[@]}")"
+}
+
+# verify_feed BUILD: checks that the feed installed copies read serves the new build. GitHub
+# can take a moment to point "latest" at the new release, so it retries before warning.
+verify_feed() {
+  local build="$1" attempt
+  for attempt in 1 2 3 4 5 6; do
+    if curl -fsSL "$FEED_URL" 2>/dev/null | grep -qF "<sparkle:version>$build</sparkle:version>"; then
+      echo "Update feed OK: $FEED_URL serves build $build"
+      return
+    fi
+    [[ "$attempt" == 6 ]] || sleep "${FEED_RETRY_SECONDS:-5}"
+  done
+  echo "warning: $FEED_URL does not serve build $build yet; check that v$VERSION is the latest release and has appcast.xml" >&2
+}
+
 prepare() {
   local bump="${1:-patch}"
   require_signing
+  require_github
   [[ "$(git branch --show-current)" == "$BRANCH" ]] ||
     fail "releases are cut from $BRANCH (set RELEASE_BRANCH to override)"
   [[ -z "$(git status --porcelain)" ]] || fail "the working tree has changes; commit or stash them"
@@ -143,6 +199,7 @@ prepare() {
 publish() {
   [[ -f "$STATE" ]] || fail "nothing prepared; run scripts/release.sh prepare first"
   require_signing
+  require_github
   require_sparkle_key
   local VERSION="" COMMIT="" CDHASH="" MODE="" NOTARIZATION=""
   # shellcheck source=/dev/null
@@ -159,6 +216,9 @@ publish() {
   local changed
   changed="$(git status --porcelain | grep -v ' Resources/Info.plist$' || true)"
   [[ -z "$changed" ]] || fail "files other than Resources/Info.plist changed since prepare"
+  if [[ -n "$REPO" ]] && gh release view "v$VERSION" --repo "$REPO" >/dev/null 2>&1; then
+    fail "a GitHub release v$VERSION already exists in $REPO"
+  fi
 
   # The PPPC profile for managed Macs and the DMG (signing, notarization, stapling) are made
   # from the tested app before anything is committed or tagged, so a failure in either leaves
@@ -212,15 +272,15 @@ publish() {
 
   if git remote get-url origin >/dev/null 2>&1; then
     git push origin "$BRANCH" "v$VERSION"
-    # An ad-hoc release has no appcast, so it must not become "latest": installed copies fetch
-    # releases/latest/download/appcast.xml.
-    local latest=()
-    is_adhoc && latest=(--latest=false)
-    gh release create "v$VERSION" "${assets[@]}" --title "Spacer $VERSION" --notes-file "$notes" ${latest[@]+"${latest[@]}"}
+    publish_release "$VERSION" "${assets[@]}"
   else
+    # Only ad-hoc releases get here: require_github needs origin for the others.
     echo "No origin remote: the tag and release files stay local."
   fi
   echo "Released Spacer $VERSION: tag v$VERSION, ${assets[*]}"
+  if ! is_adhoc; then
+    verify_feed "$(plutil -extract CFBundleVersion raw build/Spacer.app/Contents/Info.plist)"
+  fi
 }
 
 case "${1:-}" in

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks `scripts/release.sh publish` without certificates, notarization or GitHub: each case
 # runs in a throwaway copy of the repo with stub codesign, security and gh on PATH, a stub
-# scripts/make-dmg.sh and a local bare repo as origin. The NOTARIZE cases run the real
+# scripts/make-dmg.sh and a local bare repo as origin (named https://github.com/<feed repo>.git,
+# rewritten to the bare repo with url.insteadOf, so the origin check sees a GitHub URL). The NOTARIZE cases run the real
 # make-dmg.sh instead, with stub hdiutil and xcrun (notarytool and stapler are logged, not run).
 # Nothing touches this checkout. Exits non-zero when any check fails.
 set -uo pipefail
@@ -16,6 +17,8 @@ export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 DEVELOPER_ID_IDENTITY="Developer ID Application: Test (ABCDE12345)"
+FEED_REPO="$(plutil -extract SUFeedURL raw "$SRC/Resources/Info.plist" | sed -E 's|^https://github.com/([^/]+/[^/]+)/.*|\1|')"
+FEED_REMOTE="https://github.com/$FEED_REPO.git"
 APP_ID="$(plutil -extract CFBundleIdentifier raw "$SRC/Resources/Info.plist")"
 DEVELOPER_ID_REQUIREMENT="designated => identifier \"$APP_ID\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ABCDE12345"
 
@@ -35,9 +38,27 @@ cat >"$BIN/security" <<'EOF'
 #!/usr/bin/env bash
 printf '  1) 0123456789ABCDEF "%s"\n' "$STUB_IDENTITY"
 EOF
+# Stub gh: `auth status` passes unless STUB_GH_AUTH=fail; `release view` finds a release only
+# with STUB_GH_RELEASE_EXISTS=1; `release create` logs its arguments to STUB_GH_LOG and fails
+# with STUB_GH_CREATE=fail.
 cat >"$BIN/gh" <<'EOF'
 #!/usr/bin/env bash
-echo "$*" >"$STUB_GH_LOG"
+case "$1 $2" in
+  "auth status") [[ "${STUB_GH_AUTH:-}" != fail ]] ;;
+  "release view") [[ "${STUB_GH_RELEASE_EXISTS:-}" == 1 ]] ;;
+  "release create")
+    echo "$*" >"$STUB_GH_LOG"
+    [[ "${STUB_GH_CREATE:-}" != fail ]]
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+# Stub curl: serves STUB_FEED (the appcast the release just made) for the feed check, or fails
+# like a 404 when it is unset.
+cat >"$BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+[[ -n "${STUB_FEED:-}" && -f "$STUB_FEED" ]] || exit 22
+cat "$STUB_FEED"
 EOF
 # Stub mktemp: make-dmg.sh's `mktemp -d` (no template) goes under TMPDIR, the test's own
 # directory, because macOS mktemp ignores TMPDIR and /var/folders is not always writable.
@@ -109,7 +130,8 @@ EOF
     git commit -q -m init
     if [[ "${2:-}" != noorigin ]]; then
       git init -q --bare "$dir/origin.git"
-      git remote add origin "$dir/origin.git"
+      git remote add origin "${ORIGIN_URL:-$FEED_REMOTE}"
+      git config "url.$dir/origin.git.insteadOf" "${ORIGIN_URL:-$FEED_REMOTE}"
     fi
     scripts/version.sh patch >/dev/null
     mkdir -p build/Spacer.app/Contents
@@ -130,6 +152,7 @@ publish() {
       TMPDIR="$dir" \
       STUB_IDENTITY="$DEVELOPER_ID_IDENTITY" STUB_REQUIREMENT="$DEVELOPER_ID_REQUIREMENT" \
       STUB_GH_LOG="$dir/gh-args" STUB_XCRUN_LOG="$dir/xcrun-calls" \
+      STUB_FEED="$dir/repo/build/appcast.xml" FEED_RETRY_SECONDS=0 \
       SPARKLE_SIGN_UPDATE="$BIN/sign_update" SPARKLE_GENERATE_KEYS="$BIN/generate_keys" \
       SIGN_IDENTITY="$DEVELOPER_ID_IDENTITY" \
       "$@" scripts/release.sh publish
@@ -182,6 +205,12 @@ check "Developer ID: appcast carries the EdDSA signature" grep -qF \
   'sparkle:edSignature="c3R1Yg=="' "$d/repo/build/appcast.xml"
 check "Developer ID: gh gets the appcast" gh_has "$d" "build/appcast.xml"
 check "Developer ID: gh release is the latest" gh_lacks "$d" "--latest=false"
+check "Developer ID: gh release targets the feed repo" gh_has "$d" "--repo $FEED_REPO"
+check "Developer ID: gh release needs the pushed tag" gh_has "$d" "--verify-tag"
+check "Developer ID: feed check passes" grep -qF "Update feed OK" "$d/log"
+check "Developer ID: appcast links the release notes" grep -qF \
+  "<sparkle:fullReleaseNotesLink>https://github.com/$FEED_REPO/releases/tag/v$(version_of "$d")</sparkle:fullReleaseNotesLink>" \
+  "$d/repo/build/appcast.xml"
 check "Developer ID: appcast sparkle:version is CFBundleVersion" grep -qF \
   "<sparkle:version>$(plutil -extract CFBundleVersion raw "$d/repo/build/Spacer.app/Contents/Info.plist")</sparkle:version>" \
   "$d/repo/build/appcast.xml"
@@ -204,10 +233,48 @@ check "ad-hoc: stale appcast removed" test ! -e "$d/repo/build/appcast.xml"
 
 d="$WORK/noorigin"
 new_repo "$d" noorigin
+refused "Developer ID without origin" "$d"
+check "Developer ID without origin: no DMG made" no_dmg "$d"
+
+d="$WORK/noorigin-adhoc"
+STATE_MODE=adhoc new_repo "$d" noorigin
+publish "$d" ALLOW_ADHOC=1 STUB_REQUIREMENT='# designated => cdhash H"0123"'
+check "ad-hoc without origin: exits 0" test $? -eq 0
+check "ad-hoc without origin: local tag" has_tag "$d"
+check "ad-hoc without origin: nothing published" gh_not_called "$d"
+
+d="$WORK/wrong-origin"
+ORIGIN_URL="https://github.com/someone-else/Spacer.git" new_repo "$d"
+refused "origin is not the feed repo" "$d"
+check "origin is not the feed repo: no DMG made" no_dmg "$d"
+
+d="$WORK/ssh-origin"
+ORIGIN_URL="git@github.com:$FEED_REPO.git" new_repo "$d"
 publish "$d"
-check "no origin: exits 0" test $? -eq 0
-check "no origin: local tag" has_tag "$d"
-check "no origin: nothing published" gh_not_called "$d"
+check "ssh origin of the feed repo: exits 0" test $? -eq 0
+
+d="$WORK/gh-logged-out"
+new_repo "$d"
+refused "gh not logged in" "$d" STUB_GH_AUTH=fail
+check "gh not logged in: no DMG made" no_dmg "$d"
+
+d="$WORK/release-exists"
+new_repo "$d"
+refused "GitHub release already exists" "$d" STUB_GH_RELEASE_EXISTS=1
+check "GitHub release already exists: no DMG made" no_dmg "$d"
+
+d="$WORK/gh-create-fails"
+new_repo "$d"
+publish "$d" STUB_GH_CREATE=fail
+check "gh release create fails: exits non-zero" test $? -ne 0
+check "gh release create fails: tag pushed" origin_has_tag "$d"
+check "gh release create fails: prints the command to finish" grep -qF "gh release create v$(version_of "$d")" "$d/log"
+
+d="$WORK/feed-stale"
+new_repo "$d"
+publish "$d" STUB_FEED=
+check "feed not updated yet: still exits 0" test $? -eq 0
+check "feed not updated yet: warns" grep -qF "does not serve build" "$d/log"
 
 d="$WORK/profile-fails"
 new_repo "$d"

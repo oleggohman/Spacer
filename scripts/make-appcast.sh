@@ -12,12 +12,14 @@
 # APP    the packaged app the DMG holds; version, build and minimum macOS are read from its
 #        Info.plist (default: build/Spacer.app), not from the working tree.
 #
-# GITHUB_REPO          owner/name the release is published to (default: oleggohman/Spacer).
+# The GitHub repo (owner/name) comes from the app's SUFeedURL; see scripts/lib/github.sh.
 # SPARKLE_SIGN_UPDATE  Sparkle's sign_update tool (default: the one SwiftPM downloaded).
 # SPARKLE_KEY_ACCOUNT  keychain account of the EdDSA private key (default: the bundle ID).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/github.sh
+source "$ROOT/scripts/lib/github.sh"
 
 fail() {
   echo "error: $*" >&2
@@ -35,7 +37,8 @@ plist_value() { plutil -extract "$1" raw "$PLIST"; }
 VERSION="$(plist_value CFBundleShortVersionString)"
 BUILD="$(plist_value CFBundleVersion)"
 MIN_SYSTEM="$(plist_value LSMinimumSystemVersion)"
-REPO="${GITHUB_REPO:-oleggohman/Spacer}"
+REPO="$(feed_repo "$PLIST")" ||
+  fail "SUFeedURL in $PLIST is not https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml"
 SIGN_UPDATE="${SPARKLE_SIGN_UPDATE:-$ROOT/.build/artifacts/sparkle/Sparkle/bin/sign_update}"
 ACCOUNT="${SPARKLE_KEY_ACCOUNT:-$(plist_value CFBundleIdentifier)}"
 [[ -x "$SIGN_UPDATE" ]] || fail "$SIGN_UPDATE not found; run swift package resolve first"
@@ -50,6 +53,7 @@ xml_escape() {
 }
 changes="$(sed -n 's/^- //p' "$NOTES" | xml_escape | sed 's|.*|        <li>&</li>|')"
 url="https://github.com/$REPO/releases/download/v$VERSION/$(basename "$DMG")"
+notes_url="https://github.com/$REPO/releases/tag/v$VERSION"
 
 cat >"$OUT" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
@@ -63,6 +67,7 @@ cat >"$OUT" <<EOF
       <sparkle:version>$BUILD</sparkle:version>
       <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>$MIN_SYSTEM</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>$notes_url</sparkle:fullReleaseNotesLink>
       <description><![CDATA[
       <ul>
 $changes
