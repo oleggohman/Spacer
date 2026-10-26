@@ -12,6 +12,7 @@ A native macOS disk usage treemap app. It is a SwiftUI app built as a Swift Pack
 
 ## Rules
 
+- A notarized DMG always has "notarized" in its file name: `Spacer-X.Y.Z-notarized.dmg` (without notarization it is `Spacer-X.Y.Z.dmg`). `dmg_name` in `scripts/lib/signing.sh` picks the name; never hard-code the DMG name elsewhere.
 - Put logic in SpacerCore and cover it with tests. Views stay thin. When a view needs a computed helper, move it to SpacerCore and test it there.
 - Every delete must go through `DeletionService` (via `ScanSession.delete`), which applies the guard rails: it refuses the scan root, volume roots, the home folder, system prefixes (/System, /usr, /bin, /sbin, /Library), Apple apps in /Applications, any folder that contains one of these (or a mounted volume, /Applications, /private/etc, /private/var, /private/tmp), and anything outside the scan root. Never call `FileManager.removeItem`/`trashItem` on user items anywhere else. After a delete, update the tree with `FileNode.remove()` instead of rescanning.
 - Deletion returns a result per item and never throws for the whole batch.
