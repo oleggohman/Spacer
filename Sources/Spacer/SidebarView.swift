@@ -8,6 +8,9 @@ struct SidebarView: View {
   let recents: [URL]
   let onScan: (URL) -> Void
   let onRefreshVolumes: () -> Void
+  /// The volume being ejected, if any. Its eject button shows progress and is disabled.
+  let ejecting: URL?
+  let onEject: (VolumeInfo) -> Void
   @State private var choosingFolder = false
 
   var body: some View {
@@ -15,12 +18,35 @@ struct SidebarView: View {
       Section("Disks") {
         ForEach(volumes) { volume in
           let isCurrent = session.scanURL == volume.url
-          Button {
-            onScan(volume.url)
-          } label: {
-            DiskRow(volume: volume, finishedAt: isCurrent ? session.finishedAt : nil)
+          HStack(spacing: Theme.spacingSM) {
+            Button {
+              onScan(volume.url)
+            } label: {
+              DiskRow(volume: volume, finishedAt: isCurrent ? session.finishedAt : nil)
+            }
+            .buttonStyle(.plain)
+            if volume.isEjectable {
+              if ejecting == volume.url {
+                ProgressView().controlSize(.small)
+              }
+              // A separate button, not inside the scan button, so a click never scans.
+              Button {
+                onEject(volume)
+              } label: {
+                Image(systemName: "eject")
+              }
+              .buttonStyle(.borderless)
+              .disabled(ejecting != nil)
+              .help("Eject \(volume.name)")
+              .accessibilityLabel("Eject \(volume.name)")
+            }
           }
-          .buttonStyle(.plain)
+          .contextMenu {
+            if volume.isEjectable {
+              Button("Eject") { onEject(volume) }
+                .disabled(ejecting != nil)
+            }
+          }
           .listRowBackground(currentBackground(isCurrent))
         }
       }

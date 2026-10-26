@@ -7,6 +7,9 @@ public struct VolumeInfo: Sendable, Hashable, Identifiable {
   public let name: String
   public let totalCapacity: Int64
   public let availableCapacity: Int64
+  /// True for a volume that can be unmounted from the sidebar: a disk image or a removable or
+  /// external drive. Never the startup disk.
+  public let isEjectable: Bool
 
   public var id: URL { url }
   public var usedCapacity: Int64 { max(0, totalCapacity - availableCapacity) }
@@ -17,11 +20,27 @@ public struct VolumeInfo: Sendable, Hashable, Identifiable {
     return min(1, Double(usedCapacity) / Double(totalCapacity))
   }
 
-  public init(url: URL, name: String, totalCapacity: Int64, availableCapacity: Int64) {
+  public init(
+    url: URL, name: String, totalCapacity: Int64, availableCapacity: Int64,
+    isEjectable: Bool = false
+  ) {
     self.url = url
     self.name = name
     self.totalCapacity = totalCapacity
     self.availableCapacity = availableCapacity
+    self.isEjectable = isEjectable
+  }
+
+  /// True when `url` is the volume's root or a path inside it. Paths are compared by their
+  /// components, so "/Volumes/Foo" does not contain "/Volumes/FooBar".
+  public func contains(_ url: URL) -> Bool {
+    let root = Self.components(of: self.url)
+    let path = Self.components(of: url)
+    return path.count >= root.count && path.prefix(root.count).elementsEqual(root)
+  }
+
+  private static func components(of url: URL) -> [String] {
+    url.standardizedFileURL.resolvingSymlinksInPath().pathComponents
   }
 
   /// The visible mounted volumes, in the order the system reports them.
@@ -29,6 +48,7 @@ public struct VolumeInfo: Sendable, Hashable, Identifiable {
     let keys: [URLResourceKey] = [
       .volumeLocalizedNameKey, .volumeTotalCapacityKey,
       .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey,
+      .volumeIsEjectableKey, .volumeIsRemovableKey, .volumeIsRootFileSystemKey,
     ]
     let urls =
       FileManager.default.mountedVolumeURLs(
@@ -38,9 +58,15 @@ public struct VolumeInfo: Sendable, Hashable, Identifiable {
       let available =
         values.volumeAvailableCapacityForImportantUsage
         ?? values.volumeAvailableCapacity.map(Int64.init) ?? 0
+      // Disk images report as ejectable, external drives as removable. The startup disk is
+      // never offered, even when the system marks it as ejectable.
+      let ejectable =
+        (values.volumeIsEjectable == true || values.volumeIsRemovable == true)
+        && values.volumeIsRootFileSystem != true
       return VolumeInfo(
         url: url, name: values.volumeLocalizedName ?? url.lastPathComponent,
-        totalCapacity: Int64(values.volumeTotalCapacity ?? 0), availableCapacity: available)
+        totalCapacity: Int64(values.volumeTotalCapacity ?? 0), availableCapacity: available,
+        isEjectable: ejectable)
     }
   }
 }
@@ -352,6 +378,29 @@ public final class ScanSession {
   public func waitForScan() async {
     await scanTask?.value
     await progressTask?.value
+  }
+
+  /// Lets go of the scan of `volume` so the volume can be ejected. A running scan of it is
+  /// cancelled and waited for, since the scanner must stop reading the volume. Then the shown
+  /// tree and any retained tree are freed and the session goes back to idle. A scan of another
+  /// location is left alone.
+  public func releaseScan(on volume: VolumeInfo) async {
+    guard let scanURL, volume.contains(scanURL) else { return }
+    // `cancel()` drops the tasks, so they are kept here to wait for them.
+    let running = [scanTask, progressTask]
+    cancel()
+    for task in running { await task?.value }
+    // Ends a delete or undo that still runs on the released tree.
+    generation += 1
+    discard(retainedScan?.root)
+    discard(root)
+    retainedScan = nil
+    rescanTarget = nil
+    clearShownScan()
+    treeVersion += 1
+    self.scanURL = nil
+    scanPath = nil
+    state = .idle
   }
 
   private func stopTasks() {

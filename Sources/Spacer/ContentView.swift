@@ -12,6 +12,9 @@ struct ContentView: View {
   @State private var confirmPermanentDeletion = false
   @State private var deletionFailures: [DeletionResult] = []
   @State private var restoreFailures: [DeletionResult] = []
+  /// The volume being ejected, and the error of the last eject that failed.
+  @State private var ejecting: URL?
+  @State private var ejectFailure: EjectFailure?
   /// The text of the banner under the map after a delete, and a counter that tells a newer banner
   /// from the one a pending auto-dismiss belongs to.
   @State private var bannerText: String?
@@ -23,7 +26,8 @@ struct ContentView: View {
     NavigationSplitView {
       SidebarView(
         session: session, volumes: volumes, recents: recents,
-        onScan: scan, onRefreshVolumes: { volumes = VolumeInfo.mounted() }
+        onScan: scan, onRefreshVolumes: { volumes = VolumeInfo.mounted() },
+        ejecting: ejecting, onEject: eject
       )
       .disabled(session.isDeleting)
       .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 280)
@@ -84,6 +88,13 @@ struct ContentView: View {
       Text(
         restoreFailures.map { "\($0.node.name): \($0.error?.message ?? "")" }
           .joined(separator: "\n"))
+    }
+    .alert(
+      "Couldn’t eject \(ejectFailure?.name ?? "")", isPresented: ejectFailureShown
+    ) {
+      Button("OK") { ejectFailure = nil }
+    } message: {
+      Text(ejectFailure?.message ?? "")
     }
   }
 
@@ -256,6 +267,27 @@ struct ContentView: View {
     Binding(get: { !restoreFailures.isEmpty }, set: { if !$0 { restoreFailures = [] } })
   }
 
+  private var ejectFailureShown: Binding<Bool> {
+    Binding(get: { ejectFailure != nil }, set: { if !$0 { ejectFailure = nil } })
+  }
+
+  /// Lets go of the scan of `volume`, ejects it and refreshes the list. A failure is shown in an
+  /// alert. Ignored while another eject runs.
+  private func eject(_ volume: VolumeInfo) {
+    guard ejecting == nil else { return }
+    ejecting = volume.url
+    Task {
+      await session.releaseScan(on: volume)
+      do {
+        try await VolumeEjector.eject(volume)
+      } catch {
+        ejectFailure = EjectFailure(name: volume.name, message: error.localizedDescription)
+      }
+      ejecting = nil
+      volumes = VolumeInfo.mounted()
+    }
+  }
+
   private func performDeletion(_ mode: DeletionMode) {
     let nodes = session.selection
     pendingDeletion = nil
@@ -295,6 +327,12 @@ struct ContentView: View {
       }
     }
   }
+}
+
+/// The volume that could not be ejected, and why, for the alert.
+private struct EjectFailure {
+  let name: String
+  let message: String
 }
 
 /// The scan path from the root to the zoom focus. Each segment zooms to that folder.

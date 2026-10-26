@@ -5,6 +5,7 @@ A native macOS app that shows disk usage as a treemap. Scan a disk or folder, se
 - Every file and folder is a block sized by the space it takes, colored by type (documents, photos, music, video, apps, archives, developer files).
 - Zoom into folders, search by name, and see details in the inspector.
 - Open, reveal in Finder, move to the Trash (with Undo) or delete permanently. The map updates without a rescan.
+- Eject disk images and external drives from the sidebar.
 - Guard rails: Spacer refuses to delete system folders, Apple apps, your home folder and the scanned folder itself.
 - Works with VoiceOver.
 
