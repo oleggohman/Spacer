@@ -29,7 +29,7 @@ struct ContentView: View {
         onScan: scan, onRefreshVolumes: { volumes = VolumeInfo.mounted() },
         ejecting: ejecting, onEject: eject
       )
-      .disabled(session.isDeleting)
+      .disabled(session.isDeleting || ejecting != nil)
       .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 280)
     } detail: {
       detail
@@ -90,11 +90,11 @@ struct ContentView: View {
           .joined(separator: "\n"))
     }
     .alert(
-      "Couldn’t eject \(ejectFailure?.name ?? "")", isPresented: ejectFailureShown
-    ) {
+      "Couldn’t eject", isPresented: ejectFailureShown, presenting: ejectFailure
+    ) { _ in
       Button("OK") { ejectFailure = nil }
-    } message: {
-      Text(ejectFailure?.message ?? "")
+    } message: { failure in
+      Text("“\(failure.name)”: \(failure.message)")
     }
   }
 
@@ -277,7 +277,7 @@ struct ContentView: View {
     guard ejecting == nil else { return }
     ejecting = volume.url
     Task {
-      await session.releaseScan(on: volume)
+      await session.releaseScan(on: volume, sharingDiskIn: volumes)
       do {
         try await VolumeEjector.eject(volume)
       } catch {

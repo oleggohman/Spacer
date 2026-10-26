@@ -10,6 +10,9 @@ public struct VolumeInfo: Sendable, Hashable, Identifiable {
   /// True for a volume that can be unmounted from the sidebar: a disk image or a removable or
   /// external drive. Never the startup disk.
   public let isEjectable: Bool
+  /// The physical disk the volume lives on, such as "disk5", or nil when unknown. Volumes of the
+  /// same disk are unmounted together by an eject.
+  public let diskIdentifier: String?
 
   public var id: URL { url }
   public var usedCapacity: Int64 { max(0, totalCapacity - availableCapacity) }
@@ -22,13 +25,38 @@ public struct VolumeInfo: Sendable, Hashable, Identifiable {
 
   public init(
     url: URL, name: String, totalCapacity: Int64, availableCapacity: Int64,
-    isEjectable: Bool = false
+    isEjectable: Bool = false, diskIdentifier: String? = nil
   ) {
     self.url = url
     self.name = name
     self.totalCapacity = totalCapacity
     self.availableCapacity = availableCapacity
     self.isEjectable = isEjectable
+    self.diskIdentifier = diskIdentifier
+  }
+
+  /// The whole-disk name of a device node: "/dev/disk5s2" gives "disk5". Nil when `device` is not
+  /// a disk device, such as "map auto_home".
+  public static func wholeDiskIdentifier(ofDevice device: String) -> String? {
+    let name = device.hasPrefix("/dev/") ? String(device.dropFirst(5)) : device
+    guard name.hasPrefix("disk") else { return nil }
+    let digits = name.dropFirst(4).prefix { $0.isASCII && $0.isNumber }
+    return digits.isEmpty ? nil : "disk" + digits
+  }
+
+  /// The device a volume is mounted from, as in `f_mntfromname`. Nil when it cannot be read.
+  private static func mountDevice(of url: URL) -> String? {
+    var info = statfs()
+    guard statfs(url.path, &info) == 0 else { return nil }
+    return withUnsafeBytes(of: &info.f_mntfromname) { raw in
+      String(validatingCString: raw.bindMemory(to: CChar.self).baseAddress!)
+    }
+  }
+
+  /// True when `other` is a different volume of the same physical disk.
+  public func sharesDisk(with other: VolumeInfo) -> Bool {
+    guard let diskIdentifier else { return false }
+    return diskIdentifier == other.diskIdentifier
   }
 
   /// True when `url` is the volume's root or a path inside it. Paths are compared by their
@@ -66,7 +94,8 @@ public struct VolumeInfo: Sendable, Hashable, Identifiable {
       return VolumeInfo(
         url: url, name: values.volumeLocalizedName ?? url.lastPathComponent,
         totalCapacity: Int64(values.volumeTotalCapacity ?? 0), availableCapacity: available,
-        isEjectable: ejectable)
+        isEjectable: ejectable,
+        diskIdentifier: mountDevice(of: url).flatMap(wholeDiskIdentifier(ofDevice:)))
     }
   }
 }
@@ -132,6 +161,8 @@ public final class ScanSession {
   public var hovered: FileNode?
   /// True while a delete runs. A second delete is ignored until the first one finishes.
   public private(set) var isDeleting = false
+  /// True while `releaseScan` runs. Scans, deletes and undo are ignored until it is done.
+  public private(set) var isReleasing = false
   /// The last Move to Trash, which `undoLastTrash()` puts back. Nil after a permanent delete, a
   /// new scan, `dismissUndo()`, and the next delete.
   public private(set) var undoableTrash: TrashBatch?
@@ -208,6 +239,7 @@ public final class ScanSession {
   // MARK: Scanning
 
   public func start(url: URL) {
+    guard !isReleasing else { return }
     stopTasks()
     generation += 1
     let current = generation
@@ -319,7 +351,7 @@ public final class ScanSession {
   /// rescanned and its new tree replaces the old one, so the rest of the tree is kept. Otherwise the
   /// whole location is scanned.
   public func rescan() {
-    guard let scanURL else { return }
+    guard let scanURL, !isReleasing else { return }
     guard rescansFocusOnly, let root, let focus else {
       start(url: scanURL)
       return
@@ -350,6 +382,7 @@ public final class ScanSession {
   /// Showing the root is a zoom like `zoomTo`: the tree is unchanged, so selection, hover and the
   /// category highlight stay as they are and `treeVersion` is not bumped.
   public func open(url: URL) {
+    guard !isReleasing else { return }
     guard scanURL != nil, scanPath == Self.normalizedPath(url) else {
       start(url: url)
       return
@@ -380,18 +413,26 @@ public final class ScanSession {
     await progressTask?.value
   }
 
-  /// Lets go of the scan of `volume` so the volume can be ejected. A running scan of it is
-  /// cancelled and waited for, since the scanner must stop reading the volume. Then the shown
-  /// tree and any retained tree are freed and the session goes back to idle. A scan of another
-  /// location is left alone.
-  public func releaseScan(on volume: VolumeInfo) async {
-    guard let scanURL, volume.contains(scanURL) else { return }
+  /// Lets go of the scan of `volume` so the volume can be ejected. That includes a scan of any
+  /// volume in `others` that shares the disk, since the eject unmounts the whole disk. A running
+  /// scan is cancelled and waited for, since the scanner must stop reading the volume, and a
+  /// running delete or undo is waited for too. Then the shown tree and any retained tree are
+  /// freed and the session goes back to idle. A scan of another location is left alone. Scans
+  /// and deletes are ignored until this returns.
+  public func releaseScan(on volume: VolumeInfo, sharingDiskIn others: [VolumeInfo] = []) async {
+    guard let scanURL, !isReleasing,
+      volume.contains(scanURL)
+        || others.contains(where: { volume.sharesDisk(with: $0) && $0.contains(scanURL) })
+    else { return }
+    isReleasing = true
+    defer { isReleasing = false }
     // `cancel()` drops the tasks, so they are kept here to wait for them.
     let running = [scanTask, progressTask]
     cancel()
     for task in running { await task?.value }
-    // Ends a delete or undo that still runs on the released tree.
+    // Ends a delete or undo that still runs on the tree to release, then waits for it.
     generation += 1
+    while isDeleting { try? await Task.sleep(for: .milliseconds(10)) }
     discard(retainedScan?.root)
     discard(root)
     retainedScan = nil
@@ -595,7 +636,7 @@ public final class ScanSession {
   /// If a new scan starts meanwhile, the old tree is left alone.
   @discardableResult
   public func delete(_ nodes: Set<FileNode>, mode: DeletionMode) async -> [DeletionResult] {
-    guard let root, !isDeleting else { return [] }
+    guard let root, !isDeleting, !isReleasing else { return [] }
     isDeleting = true
     defer { isDeleting = false }
     let current = generation
@@ -646,7 +687,7 @@ public final class ScanSession {
   /// An item whose original path is taken again stays in the Trash and is reported as failed.
   @discardableResult
   public func undoLastTrash() async -> [DeletionResult] {
-    guard let batch = undoableTrash, let root, !isDeleting else { return [] }
+    guard let batch = undoableTrash, let root, !isDeleting, !isReleasing else { return [] }
     isDeleting = true
     defer { isDeleting = false }
     let current = generation

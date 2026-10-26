@@ -9,20 +9,25 @@ private func volume(at url: URL, ejectable: Bool = false) -> VolumeInfo {
     isEjectable: ejectable)
 }
 
-/// Runs hdiutil with `arguments` and reports whether it succeeded. False when it cannot start.
-private func hdiutil(_ arguments: [String]) -> Bool {
+private let hdiutilAvailable = FileManager.default.isExecutableFile(atPath: "/usr/bin/hdiutil")
+
+/// Runs hdiutil with `arguments`. Returns nil on success, else a description of the failure.
+private func hdiutil(_ arguments: [String]) -> String? {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
   process.arguments = arguments
   process.standardOutput = FileHandle.nullDevice
-  process.standardError = FileHandle.nullDevice
+  let errors = Pipe()
+  process.standardError = errors
   do {
     try process.run()
   } catch {
-    return false
+    return "could not start hdiutil: \(error)"
   }
+  let output = errors.fileHandleForReading.readDataToEndOfFile()
   process.waitUntilExit()
-  return process.terminationStatus == 0
+  guard process.terminationStatus != 0 else { return nil }
+  return "hdiutil \(arguments.first ?? "") failed: " + (String(data: output, encoding: .utf8) ?? "")
 }
 
 @MainActor private func isIdle(_ session: ScanSession) -> Bool {
@@ -131,8 +136,8 @@ private func hdiutil(_ arguments: [String]) -> Bool {
   }
 
   /// Mounts a small APFS disk image, ejects it and checks it is gone from the mounted volumes.
-  /// Quietly returns when hdiutil cannot create or attach an image here.
-  @Test func ejectUnmountsADiskImage() async throws {
+  /// Skipped when hdiutil is missing. A failure to create or attach the image is recorded.
+  @Test(.enabled(if: hdiutilAvailable)) func ejectUnmountsADiskImage() async throws {
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("SpacerEject-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -144,13 +149,18 @@ private func hdiutil(_ arguments: [String]) -> Bool {
       _ = hdiutil(["detach", "-force", mountPoint.path])
       try? FileManager.default.removeItem(at: dir)
     }
-    guard
-      hdiutil([
-        "create", "-size", "2m", "-fs", "APFS", "-volname", "SpacerEjectTest", image.path,
-      ]),
-      // Not -nobrowse: such volumes are hidden and would not be listed by `mounted()`.
-      hdiutil(["attach", "-noautoopen", "-mountpoint", mountPoint.path, image.path])
-    else { return }
+    if let failure = hdiutil([
+      "create", "-size", "2m", "-fs", "APFS", "-volname", "SpacerEjectTest", image.path,
+    ]) {
+      Issue.record("\(failure)")
+      return
+    }
+    // Not -nobrowse: such volumes are hidden and would not be listed by `mounted()`.
+    if let failure = hdiutil(["attach", "-noautoopen", "-mountpoint", mountPoint.path, image.path])
+    {
+      Issue.record("\(failure)")
+      return
+    }
 
     let mounted = try #require(
       VolumeInfo.mounted().first {
@@ -161,5 +171,71 @@ private func hdiutil(_ arguments: [String]) -> Bool {
     try await VolumeEjector.eject(mounted)
 
     #expect(!VolumeInfo.mounted().contains { $0.id == mounted.id })
+  }
+
+  @Test func wholeDiskIdentifierStripsPartitionAndSnapshotSuffixes() {
+    #expect(VolumeInfo.wholeDiskIdentifier(ofDevice: "/dev/disk5s1") == "disk5")
+    #expect(VolumeInfo.wholeDiskIdentifier(ofDevice: "/dev/disk5s2") == "disk5")
+    #expect(VolumeInfo.wholeDiskIdentifier(ofDevice: "/dev/disk12s1s1") == "disk12")
+    #expect(VolumeInfo.wholeDiskIdentifier(ofDevice: "/dev/disk7") == "disk7")
+    #expect(VolumeInfo.wholeDiskIdentifier(ofDevice: "map auto_home") == nil)
+    #expect(VolumeInfo.wholeDiskIdentifier(ofDevice: "/dev/disk") == nil)
+    #expect(VolumeInfo.wholeDiskIdentifier(ofDevice: "") == nil)
+  }
+
+  @Test func releaseScanReleasesAScanOnASiblingVolumeOfTheSameDisk() async throws {
+    let tree = try TempTree()
+    try tree.file("a.bin", bytes: 4096)
+    let session = ScanSession()
+    session.start(url: tree.root)
+    await session.waitForScan()
+    let selected = VolumeInfo(
+      url: URL(fileURLWithPath: "/Volumes/SpacerNoSuchA"), name: "A", totalCapacity: 0,
+      availableCapacity: 0, isEjectable: true, diskIdentifier: "disk9")
+    let sibling = VolumeInfo(
+      url: tree.root, name: "B", totalCapacity: 0, availableCapacity: 0, isEjectable: true,
+      diskIdentifier: "disk9")
+
+    await session.releaseScan(on: selected, sharingDiskIn: [selected, sibling])
+
+    #expect(session.scanURL == nil)
+    #expect(isIdle(session))
+    #expect(!session.isReleasing)
+  }
+
+  @Test func releaseScanKeepsAScanOnAnotherDisk() async throws {
+    let tree = try TempTree()
+    try tree.file("a.bin", bytes: 4096)
+    let session = ScanSession()
+    session.start(url: tree.root)
+    await session.waitForScan()
+    let selected = VolumeInfo(
+      url: URL(fileURLWithPath: "/Volumes/SpacerNoSuchA"), name: "A", totalCapacity: 0,
+      availableCapacity: 0, isEjectable: true, diskIdentifier: "disk9")
+    let other = VolumeInfo(
+      url: tree.root, name: "B", totalCapacity: 0, availableCapacity: 0, isEjectable: true,
+      diskIdentifier: "disk4")
+
+    await session.releaseScan(on: selected, sharingDiskIn: [selected, other])
+
+    #expect(session.scanURL == tree.root)
+    #expect(session.root != nil)
+  }
+
+  @Test func scanStartedWhileReleasingIsIgnored() async throws {
+    let tree = try TempTree()
+    try tree.file("a.bin", bytes: 4096)
+    let other = try TempTree()
+    let session = ScanSession()
+    session.start(url: tree.root)
+    #expect(session.isScanning)
+
+    let release = Task { await session.releaseScan(on: volume(at: tree.root, ejectable: true)) }
+    await Task.yield()
+    session.start(url: other.root)
+    await release.value
+
+    #expect(session.scanURL == nil)
+    #expect(isIdle(session))
   }
 }
