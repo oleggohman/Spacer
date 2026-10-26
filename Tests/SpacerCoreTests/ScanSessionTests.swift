@@ -674,13 +674,15 @@ private func letLateScanResultsArrive() async throws {
     let (tree, session) = try await scannedSession()
     defer { withExtendedLifetime(tree) {} }
     let first = try #require(session.root)
+    // Read before the rescan: the replaced tree is taken apart afterwards.
+    let names = first.children.map(\.name).sorted()
 
     session.rescan()
     #expect(session.isScanning)
     await session.waitForScan()
 
     #expect(session.root !== first)
-    #expect(session.root?.children.map(\.name).sorted() == first.children.map(\.name).sorted())
+    #expect(session.root?.children.map(\.name).sorted() == names)
   }
 
   @Test func zoomInOutAndBreadcrumbs() async throws {

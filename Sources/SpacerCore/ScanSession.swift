@@ -187,6 +187,8 @@ public final class ScanSession {
     let current = generation
     let path = Self.normalizedPath(url)
     if path != scanPath {
+      discard(retainedScan?.root)
+      discard(root)
       retainedScan = nil
     } else if case .done = state, !isDeleting, let root, let focus {
       // Not while a delete runs: it ends early when the generation changes, so the retained tree
@@ -371,6 +373,7 @@ public final class ScanSession {
     backStack = []
     forwardStack = []
     scanPreview = nil
+    discard(retainedScan?.root)
     retainedScan = nil
     unreadableFolders = UnreadableFolders(node.unreadableFolders())
     hasFullDiskAccess = fullDiskAccessProbe()
@@ -411,7 +414,35 @@ public final class ScanSession {
       unreadableFolders.removing(under: [target]).adding(fresh.unreadableFolders())
     hasFullDiskAccess = fullDiskAccessProbe()
     treeVersion += 1
+    discard(target)
   }
+
+  /// Takes apart a tree that is no longer shown: every folder in it drops its children.
+  ///
+  /// SwiftUI can keep closures of views that are gone (key press handlers, button actions), and
+  /// they capture the nodes those views showed. One such reference to a root kept a whole scan,
+  /// millions of nodes, alive after every rescan. Emptying the folders frees all of it, and a
+  /// stray reference keeps only one empty node. It runs on the main actor, where the tree is
+  /// read, in batches so the app stays responsive while millions of nodes are freed.
+  private func discard(_ tree: FileNode?) {
+    guard let tree else { return }
+    Task {
+      var pending = [tree]
+      var emptied = 0
+      while let node = pending.popLast() {
+        pending.append(contentsOf: node.children)
+        node.children = []
+        emptied += 1
+        if emptied.isMultiple(of: Self.discardBatch) { await Task.yield() }
+      }
+      // malloc keeps freed pages for reuse, so Activity Monitor would still show the old tree.
+      // Hand them back to the system now that millions of nodes were freed.
+      malloc_zone_pressure_relief(nil, 0)
+    }
+  }
+
+  /// How many folders `discard` empties between yields to the main actor.
+  private static let discardBatch = 20_000
 
   /// `nodes` with `target` swapped for `fresh`, leaving out the nodes that are no longer in `root`.
   /// Nodes inside the replaced folder are no longer in the tree, so they are left out too.
