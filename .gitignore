@@ -35,3 +35,12 @@ build/
 
 # Ralphex run state
 .ralphex/
+
+# Internal plans, specs and design notes (this repo is public)
+docs/plans/
+docs/superpowers/
+docs/evaluation-spacer-ux.md
+
+# Brainstorming sessions and the Boost code graph
+.superpowers/
+.boostgraph/
