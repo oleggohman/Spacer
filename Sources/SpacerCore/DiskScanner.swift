@@ -47,11 +47,13 @@ public actor DiskScanner {
   static let rootMirrorNames: Set<String> = [".nofollow", ".resolve"]
 
   /// Whether a folder entry is left out of the scan. That is another volume mounted here (or an
-  /// automount trigger), or a `rootMirrorNames` folder directly under a volume root. The device
-  /// number is not used: the firmlinks of a system volume can report another device and must
-  /// still be scanned, and a device that is unknown (0) must never drop a folder.
+  /// automount trigger), a cloud placeholder folder (its content is not on this disk, and
+  /// listing it downloads it, which for a Google Drive "Other computers" backup can take hours),
+  /// or a `rootMirrorNames` folder directly under a volume root. The device number is not used:
+  /// the firmlinks of a system volume can report another device and must still be scanned, and
+  /// a device that is unknown (0) must never drop a folder.
   static func skipsFolder(_ entry: DirectoryEntry, parentIsVolumeRoot: Bool) -> Bool {
-    if entry.isMountPoint { return true }
+    if entry.isMountPoint || entry.isDataless { return true }
     return parentIsVolumeRoot && rootMirrorNames.contains(entry.name)
   }
 

@@ -57,6 +57,28 @@ import Testing
       DirectoryReader.privateSize(atPath: tree.root.appendingPathComponent("nope").path) == nil)
   }
 
+  @Test func readsFileFlags() throws {
+    let tree = try TempTree()
+    let hidden = try tree.folder("hidden")
+    try tree.file("plain.bin", bytes: 1)
+    #expect(chflags(hidden.path, UInt32(UF_HIDDEN)) == 0)
+
+    let entries = try #require(DirectoryReader.entries(atPath: tree.root.path))
+    let byName = Dictionary(uniqueKeysWithValues: entries.map { ($0.name, $0) })
+    #expect(byName["hidden"].map { $0.flags & UInt32(UF_HIDDEN) != 0 } == true)
+    #expect(byName["hidden"]?.isDataless == false)
+    #expect(byName["plain.bin"]?.flags == 0)
+  }
+
+  @Test func listingDoesNotChangeTheThreadMaterializePolicy() throws {
+    let tree = try TempTree()
+    try tree.file("a.bin", bytes: 1)
+    let policy = { getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD) }
+    let before = policy()
+    #expect(DirectoryReader.entries(atPath: tree.root.path)?.count == 1)
+    #expect(policy() == before)
+  }
+
   @Test func readsFoldersLargerThanOneBuffer() throws {
     let tree = try TempTree()
     for i in 0..<1_500 {

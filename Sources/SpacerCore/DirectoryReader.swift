@@ -18,6 +18,8 @@ struct DirectoryEntry: Sendable, Equatable {
   var allocatedSize: Int64
   /// True for a folder that another file system is mounted on, or an automount trigger.
   var isMountPoint: Bool
+  /// The BSD file flags (`st_flags`), such as `UF_HIDDEN` or `SF_DATALESS`.
+  var flags: UInt32 = 0
   /// Bytes of a clone that no other file shares (APFS), read only for files that look like
   /// clones (see `cloneID`). Nil for every other file, which counts its whole allocation.
   var privateSize: Int64? = nil
@@ -29,6 +31,10 @@ struct DirectoryEntry: Sendable, Equatable {
   /// `cloneID`, and each reports the blocks they all share as not private, so the scanner counts
   /// them once per `cloneID` (see `DiskScanner`). Set only for clones.
   var isOrphanedClone = false
+
+  /// Whether the entry is a cloud placeholder (iCloud Drive, Google Drive and other File Provider
+  /// folders): its content is not on this disk, and reading it makes the provider download it.
+  var isDataless: Bool { flags & UInt32(SF_DATALESS) != 0 }
 
   /// Whether the file is a clone of another file: it has the data stream ID of its original.
   var isClone: Bool {
@@ -51,7 +57,21 @@ enum DirectoryReader {
 
   /// The entries of the folder at `path`, or nil when it cannot be opened or read.
   /// Entries the file system reports an error for are left out.
+  ///
+  /// Cloud placeholders are never downloaded: while the folder is read, this thread fails on
+  /// dataless content instead of waiting for the File Provider to fetch it over the network.
   static func entries(atPath path: String) -> [DirectoryEntry]? {
+    let previousPolicy = getiopolicy_np(
+      IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD)
+    _ = setiopolicy_np(
+      IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD,
+      IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+    defer {
+      if previousPolicy >= 0 {
+        _ = setiopolicy_np(
+          IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD, previousPolicy)
+      }
+    }
     let fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard fd >= 0 else { return nil }
     defer { close(fd) }
@@ -61,8 +81,8 @@ enum DirectoryReader {
     request.commonattr =
       attrgroup_t(truncatingIfNeeded: ATTR_CMN_RETURNED_ATTRS)
       | attrgroup_t(
-        truncatingIfNeeded: ATTR_CMN_NAME | ATTR_CMN_DEVID | ATTR_CMN_OBJTYPE | ATTR_CMN_FILEID
-          | ATTR_CMN_ERROR)
+        truncatingIfNeeded: ATTR_CMN_NAME | ATTR_CMN_DEVID | ATTR_CMN_OBJTYPE | ATTR_CMN_FLAGS
+          | ATTR_CMN_FILEID | ATTR_CMN_ERROR)
     request.dirattr = attrgroup_t(ATTR_DIR_MOUNTSTATUS)
     request.fileattr = attrgroup_t(ATTR_FILE_LINKCOUNT | ATTR_FILE_ALLOCSIZE)
     // Extended common attributes go in `forkattr` and need FSOPT_ATTR_CMN_EXTENDED. Volumes that
@@ -156,6 +176,7 @@ enum DirectoryReader {
     }
     let device = has(returned.commonattr, ATTR_CMN_DEVID) ? take(dev_t.self) : 0
     let type = has(returned.commonattr, ATTR_CMN_OBJTYPE) ? take(fsobj_type_t.self) : nil
+    let flags = has(returned.commonattr, ATTR_CMN_FLAGS) ? take(UInt32.self) : 0
     let inode = has(returned.commonattr, ATTR_CMN_FILEID) ? take(UInt64.self) : 0
     let error = has(returned.commonattr, ATTR_CMN_ERROR) ? take(UInt32.self) : 0
     let mountStatus = has(returned.dirattr, ATTR_DIR_MOUNTSTATUS) ? take(UInt32.self) : 0
@@ -174,7 +195,7 @@ enum DirectoryReader {
     return DirectoryEntry(
       name: name, kind: kind, device: device, inode: inode, linkCount: linkCount,
       allocatedSize: kind == .directory ? 0 : allocatedSize,
-      isMountPoint: kind == .directory && mountStatus & mountFlags != 0,
+      isMountPoint: kind == .directory && mountStatus & mountFlags != 0, flags: flags,
       cloneID: kind == .directory ? nil : cloneID)
   }
 }

@@ -354,6 +354,16 @@ private func allNodes(_ node: FileNode) -> [FileNode] {
     #expect(!skipped(folder("Users", device: 2), underVolumeRoot: true))
     #expect(!skipped(folder("Users", device: 0), underVolumeRoot: true))
     #expect(!skipped(folder("Users", device: 0), underVolumeRoot: false))
+    // A cloud-only (dataless) folder is skipped anywhere: listing it downloads it.
+    var cloudOnly = folder("Other computers")
+    cloudOnly.flags = UInt32(SF_DATALESS)
+    #expect(cloudOnly.isDataless)
+    #expect(skipped(cloudOnly, underVolumeRoot: false))
+    #expect(skipped(cloudOnly, underVolumeRoot: true))
+    var hidden = folder("Hidden")
+    hidden.flags = UInt32(UF_HIDDEN)
+    #expect(!hidden.isDataless)
+    #expect(!skipped(hidden, underVolumeRoot: false))
   }
 
   /// A mirror name is only skipped under a volume root. The temp folder is not one, so
