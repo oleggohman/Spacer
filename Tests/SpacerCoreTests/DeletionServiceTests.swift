@@ -133,16 +133,22 @@ private func exists(_ url: URL) -> Bool {
     #expect(service.refusal(for: thirdParty.appendingPathComponent("Contents")) == nil)
   }
 
-  @Test func refusesAppleAppsInApplicationsSubfolders() throws {
+  /// The first Apple app in /Applications/Utilities. Some Macs have none there (only third-party
+  /// tools such as an MDM agent), and the test that needs one is skipped on them.
+  static let appleUtilityApp: URL? = {
     let utilities = URL(fileURLWithPath: "/Applications/Utilities")
     let apps = (try? FileManager.default.contentsOfDirectory(atPath: utilities.path)) ?? []
-    let appleApp = apps.map { utilities.appendingPathComponent($0) }.first {
+    return apps.map { utilities.appendingPathComponent($0) }.first {
       Bundle(url: $0)?.bundleIdentifier?.hasPrefix("com.apple.") == true
     }
-    try #require(appleApp != nil, "No Apple app in /Applications/Utilities")
+  }()
+
+  @Test(.enabled(if: appleUtilityApp != nil, "No Apple app in /Applications/Utilities"))
+  func refusesAppleAppsInApplicationsSubfolders() throws {
+    let appleApp = try #require(Self.appleUtilityApp)
     let service = DeletionService(root: URL(fileURLWithPath: "/Applications"))
-    #expect(service.refusal(for: appleApp!) == .systemApp)
-    #expect(service.refusal(for: appleApp!.appendingPathComponent("Contents")) != nil)
+    #expect(service.refusal(for: appleApp) == .systemApp)
+    #expect(service.refusal(for: appleApp.appendingPathComponent("Contents")) != nil)
   }
 
   @Test func refusesApplicationsSubfoldersThatHoldAnAppleApp() throws {
